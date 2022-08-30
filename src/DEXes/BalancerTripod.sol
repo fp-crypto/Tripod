@@ -73,6 +73,9 @@ contract BalancerTripod is NoHedgeTripod {
     //The main Balancer Pool Id
     bytes32 internal poolId;
 
+    IBalancerVault.BatchSwapStep[] internal createSwaps;
+    IAsset[] internal lpAssets;
+
     /***
         Aura specific variables for staking
     ***/
@@ -158,6 +161,34 @@ contract BalancerTripod is NoHedgeTripod {
         poolInfo[0] = getBalancerPoolInfo(tokenA);
         poolInfo[1] = getBalancerPoolInfo(tokenB);
         poolInfo[2] = getBalancerPoolInfo(tokenC);
+
+        PoolInfo memory _poolInfo;
+        for (uint256 i; i < 3; i ++) {
+            _poolInfo = poolInfo[i];
+            //address token = ;
+            //uint256 balance = IERC20(token).balanceOf(address(this));
+            //Used to offset the array to the correct index
+            uint256 j = i * 2;
+            createSwaps.push(IBalancerVault.BatchSwapStep(
+                _poolInfo.poolId,
+                j,
+                j + 1,
+                0,
+                abi.encode(0)
+            ));
+
+            createSwaps.push(IBalancerVault.BatchSwapStep(
+                poolId,
+                j + 1,
+                6,
+                0,
+                abi.encode(0)
+            ));
+
+            lpAssets.push(IAsset(_poolInfo.token));
+            lpAssets.push(IAsset(_poolInfo.bbPool));
+        }
+        lpAssets.push(IAsset(pool));
 
         //Set mapping of curve index's
         curveIndex[tokenA] = _getCRVPoolIndex(tokenA);
@@ -351,7 +382,7 @@ contract BalancerTripod is NoHedgeTripod {
      *  Function used internally to open the LP position: 
      *  Creates a batchSwap for each provider token
      * @return the amounts actually invested for each token
-     */
+     *
     function createLP() internal override returns (uint256, uint256, uint256) {
         IBalancerVault.BatchSwapStep[] memory swaps = new IBalancerVault.BatchSwapStep[](6);
         IAsset[] memory assets = new IAsset[](7);
@@ -393,6 +424,38 @@ contract BalancerTripod is NoHedgeTripod {
             IBalancerVault.SwapKind.GIVEN_IN, 
             swaps, 
             assets, 
+            getFundManagement(), 
+            limits, 
+            block.timestamp
+        );
+
+        unchecked {
+            return (
+                (uint256(limits[0]) - balanceOfA()), 
+                (uint256(limits[2]) - balanceOfB()), 
+                (uint256(limits[4]) - balanceOfC())
+            );
+        }
+    }
+*/
+    function createLP() internal override returns (uint256, uint256, uint256) {
+        IBalancerVault.BatchSwapStep[] memory swaps = createSwaps;
+        int[] memory limits = new int[](7);
+
+        //Need two trades for each provider token to create the LP
+        //Each trade goes token -> bb-token -> mainPool
+        for (uint256 i; i < 3; i ++) {
+            uint256 balance = IERC20(poolInfo[i].token).balanceOf(address(this));
+            //Used to offset the array to the correct index
+            uint256 j = i * 2;
+            swaps[j].amount = balance;
+            limits[j] = int(balance);
+        }
+        
+        balancerVault.batchSwap(
+            IBalancerVault.SwapKind.GIVEN_IN, 
+            swaps, 
+            lpAssets, 
             getFundManagement(), 
             limits, 
             block.timestamp
